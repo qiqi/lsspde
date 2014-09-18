@@ -1,3 +1,24 @@
+# adarray.py defines adarray that emulates numpy.ndarray
+# Copyright (C) 2014
+# Qiqi Wang  qiqi.wang@gmail.com
+# engineer-chaos.blogspot.com
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+from __future__ import division, print_function, absolute_import
+
+import unittest
 import numpy as np
 import numpad as ad
 
@@ -14,6 +35,7 @@ class CashTable:
     c2 = (a - 1./2) / (a - t2)
 
 def step(f, u0, dt, args=(), argv={}):
+    ad.replace_func_globals(f)
     ff = lambda u : f(u, *args, **argv)
 
     step1 = lambda u : u - u0 - dt * CashTable.a * ff(u)
@@ -30,13 +52,14 @@ def step(f, u0, dt, args=(), argv={}):
     u3 = ad.solve(step3, u2, verbose=False)
 
     u_second_order = u0 + dt * (CashTable.c1 * f1 + CashTable.c2 * f2)
+    ad.restore_func_globals(f)
     return u3, u_second_order
 
 def roundTo2ToK(n):
     log2n = log2(max(1, n))
     return 2**int(round(log2n))
 
-def integrate(f, u0, t, relTol=1E-4, absTol=1E-6):
+def integrate(f, u0, t, relTol=1E-4, absTol=1E-6, args=(), argv={}):
     u = ad.array(u0).copy()
     uHistory = [u]
     dt = t[1] - t[0]
@@ -45,7 +68,7 @@ def integrate(f, u0, t, relTol=1E-4, absTol=1E-6):
         dt = (t[i+1] - t[i]) / nSubdiv
         j = 0
         while j < nSubdiv:
-            u3rd, u2nd = step(f, u, dt)
+            u3rd, u2nd = step(f, u, dt, args, argv)
             uNorm = np.linalg.norm(ad.value(u))
             errNorm = np.linalg.norm(ad.value(u3rd) - ad.value(u2nd))
             if errNorm > max(absTol, relTol * uNorm):
@@ -61,12 +84,38 @@ def integrate(f, u0, t, relTol=1E-4, absTol=1E-6):
         uHistory.append(u)
     return ad.array(uHistory)
 
+# =========================================================== #
+#                                                             #
+#                         unittests                           #
+#                                                             #
+# =========================================================== #
+
+class _RunThroughTest(unittest.TestCase):
+    def testKuramotoSivashinsky(self):
+        pass
+
+class _GlobalErrorTest(unittest.TestCase):
+    def testHarmonicOscillator(self):
+        T, N = 10, 100
+        u0 = ad.array([1., 0.])
+        t = linspace(0, T, N)
+        u1 = integrate(lambda u : ad.hstack([u[1], -u[0]]), u0, t)
+        u2 = integrate(lambda u : ad.hstack([u[1], -u[0]]), u0, [0, T])
+        accuracy = np.linalg.norm(ad.value(u1[-1] - u2[-1]))
+        self.assertLess(accuracy, 5E-4)
+
 if __name__ == '__main__':
-    T, N = 20, 100
-    u0 = ad.array([1., 0.])
-    t = linspace(0, T, N)
-    u1 = integrate(lambda u : ad.hstack([u[1], -u[0]]), u0, t)
-    u2 = integrate(lambda u : ad.hstack([u[1], -u[0]]), u0, [0, T])
-    from pylab import *
-    plot(t, ad.value(u1))
-    plot([0, T], ad.value(u2), 'o')
+    # unittest.main()
+    def kuramotoSivashinsky(u, dx):
+        uExt = hstack([0, u, 0])
+        u2 = uExt**2
+        u2x = (u2[2:] - u2[:-2]) / (4 * dx)
+        uxx = (uExt[2:] + uExt[:-2] - 2 * uExt[1:-1]) / dx**2
+        uxxExt = hstack([0, uxx, 0])
+        uxxxx = (uxxExt[2:] + uxxExt[:-2] - 2 * uxxExt[1:-1]) / dx**2
+        return -u2x - uxx - uxxxx
+
+    L, N = 100., 100
+    u0 = np.random.random(N-1)
+    t = linspace(0, 100, 101)
+    u = integrate(kuramotoSivashinsky, u0, t, args=(L / N,))
