@@ -56,10 +56,11 @@ def step(f, u0, dt, args=(), argv={}):
     return u3, u_second_order
 
 def roundTo2ToK(n):
-    log2n = log2(max(1, n))
+    log2n = np.log2(max(1, n))
     return 2**int(round(log2n))
 
-def integrate(f, u0, t, relTol=1E-4, absTol=1E-6, args=(), argv={}):
+def integrate(f, u0, t, relTol=1E-4, absTol=1E-6, args=(), argv={},
+              obliviate=False):
     u = ad.array(u0).copy()
     uHistory = [u]
     dt = t[1] - t[0]
@@ -76,10 +77,12 @@ def integrate(f, u0, t, relTol=1E-4, absTol=1E-6, args=(), argv={}):
             else:
                 j += 1
                 u = u3rd
+                if obliviate:
+                    u.obliviate()
+                print(t[i] + (t[i+1] - t[i]) * j / nSubdiv)
                 if errNorm < 0.25 * max(absTol, relTol * uNorm) and \
                         j % 2 == 0 and nSubdiv > 1:
                     dt, j, nSubdiv = 2 * dt, j / 2, nSubdiv / 2
-                    print(dt)
         assert j == nSubdiv
         uHistory.append(u)
     return ad.array(uHistory)
@@ -98,7 +101,7 @@ class _GlobalErrorTest(unittest.TestCase):
     def testHarmonicOscillator(self):
         T, N = 10, 100
         u0 = ad.array([1., 0.])
-        t = linspace(0, T, N)
+        t = np.linspace(0, T, N)
         u1 = integrate(lambda u : ad.hstack([u[1], -u[0]]), u0, t)
         u2 = integrate(lambda u : ad.hstack([u[1], -u[0]]), u0, [0, T])
         accuracy = np.linalg.norm(ad.value(u1[-1] - u2[-1]))
@@ -107,15 +110,16 @@ class _GlobalErrorTest(unittest.TestCase):
 if __name__ == '__main__':
     # unittest.main()
     def kuramotoSivashinsky(u, dx):
-        uExt = hstack([0, u, 0])
+        uExt = np.hstack([0, u, 0])
         u2 = uExt**2
         u2x = (u2[2:] - u2[:-2]) / (4 * dx)
         uxx = (uExt[2:] + uExt[:-2] - 2 * uExt[1:-1]) / dx**2
-        uxxExt = hstack([0, uxx, 0])
+        uxxExt = np.hstack([0, uxx, 0])
         uxxxx = (uxxExt[2:] + uxxExt[:-2] - 2 * uxxExt[1:-1]) / dx**2
         return -u2x - uxx - uxxxx
 
-    L, N = 100., 100
+    L, N = 100., 1024
     u0 = np.random.random(N-1)
-    t = linspace(0, 100, 101)
-    u = integrate(kuramotoSivashinsky, u0, t, args=(L / N,))
+    t = np.linspace(0, 500, 501)
+    u = integrate(kuramotoSivashinsky, u0, t, args=(L / N,), obliviate=True)
+    np.save('u.npy', ad.value(u))
