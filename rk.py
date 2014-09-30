@@ -35,8 +35,7 @@ class CashTable:
     c2 = (a - 1./2) / (a - t2)
 
 def step(f, u0, dt, args=(), argv={}):
-    ad.replace_func_globals(f)
-    ff = lambda u : f(u, *args, **argv)
+    ff = ad.replace__globals__(lambda u : f(u, *args, **argv))
 
     step1 = lambda u : u - u0 - dt * CashTable.a * ff(u)
     u1 = ad.solve(step1, u0, verbose=False)
@@ -52,11 +51,10 @@ def step(f, u0, dt, args=(), argv={}):
     u3 = ad.solve(step3, u2, verbose=False)
 
     u_second_order = u0 + dt * (CashTable.c1 * f1 + CashTable.c2 * f2)
-    ad.restore_func_globals(f)
     return u3, u_second_order
 
 def roundTo2ToK(n):
-    log2n = log2(max(1, n))
+    log2n = np.log2(max(1, n))
     return 2**int(round(log2n))
 
 def integrate(f, u0, t, relTol=1E-4, absTol=1E-6, args=(), argv={}):
@@ -98,7 +96,7 @@ class _GlobalErrorTest(unittest.TestCase):
     def testHarmonicOscillator(self):
         T, N = 10, 100
         u0 = ad.array([1., 0.])
-        t = linspace(0, T, N)
+        t = np.linspace(0, T, N)
         u1 = integrate(lambda u : ad.hstack([u[1], -u[0]]), u0, t)
         u2 = integrate(lambda u : ad.hstack([u[1], -u[0]]), u0, [0, T])
         accuracy = np.linalg.norm(ad.value(u1[-1] - u2[-1]))
@@ -107,15 +105,15 @@ class _GlobalErrorTest(unittest.TestCase):
 if __name__ == '__main__':
     # unittest.main()
     def kuramotoSivashinsky(u, dx):
-        uExt = hstack([0, u, 0])
+        uExt = np.hstack([0, u, 0])
         u2 = uExt**2
         u2x = (u2[2:] - u2[:-2]) / (4 * dx)
         uxx = (uExt[2:] + uExt[:-2] - 2 * uExt[1:-1]) / dx**2
-        uxxExt = hstack([0, uxx, 0])
+        uxxExt = np.hstack([0, uxx, 0])
         uxxxx = (uxxExt[2:] + uxxExt[:-2] - 2 * uxxExt[1:-1]) / dx**2
         return -u2x - uxx - uxxxx
 
     L, N = 100., 100
     u0 = np.random.random(N-1)
-    t = linspace(0, 100, 101)
+    t = np.linspace(0, 100, 101)
     u = integrate(kuramotoSivashinsky, u0, t, args=(L / N,))
