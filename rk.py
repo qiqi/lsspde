@@ -22,20 +22,20 @@ import unittest
 import numpy as np
 import numpad as ad
 
-class CashTable:
+def step(f, u0, dt):
     '''
     Diagonally Implicit Runge Kutta (DIRK) coefficients in Section 2.1 of
     Cash. IMA J Appl Math (1979) 24 (3): 293-301. doi: 10.1093/imamat/24.3.293
     '''
-    a = np.polynomial.polynomial.polyroots([-1./6, 3./2, -3, 1])[1]
-    t2 = (a**2 - 3./2*a + 1./3) / (a**2 - 2*a + 1./2)
-    b1 = (t2/2 - 1./6) / ((t2 - a) * (1 - a))
-    b2 = (a/2 - 1./6) / ((a - t2) * (1 - t2))
-    c1 = (t2 - 1./2) / (t2 - a)
-    c2 = (a - 1./2) / (a - t2)
+    class CashTable:
+        a = np.polynomial.polynomial.polyroots([-1./6, 3./2, -3, 1])[1]
+        t2 = (a**2 - 3./2*a + 1./3) / (a**2 - 2*a + 1./2)
+        b1 = (t2/2 - 1./6) / ((t2 - a) * (1 - a))
+        b2 = (a/2 - 1./6) / ((a - t2) * (1 - t2))
+        c1 = (t2 - 1./2) / (t2 - a)
+        c2 = (a - 1./2) / (a - t2)
 
-def step(f, u0, dt, args=(), argv={}):
-    ff = ad.replace__globals__(lambda u : f(u, *args, **argv))
+    ff = ad.replace__globals__(f)
 
     step1 = lambda u : u - u0 - dt * CashTable.a * ff(u)
     u1 = ad.solve(step1, u0, verbose=False)
@@ -53,37 +53,72 @@ def step(f, u0, dt, args=(), argv={}):
     u_second_order = u0 + dt * (CashTable.c1 * f1 + CashTable.c2 * f2)
     return u3, u_second_order
 
-def roundTo2ToK(n):
-    log2n = np.log2(max(1, n))
-    return 2**int(round(log2n))
 
-def integrate(f, u0, t, relTol=1E-4, absTol=1E-6, args=(), argv={},
-              obliviate=False):
+def pdeint(f, u0, t, relTol=1E-4, absTol=1E-6, obliviate=False, disp=0):
+    '''
+    To be used like ode23s, using numpad for Jacobian
+    '''
+    def _roundTo2ToK(n):
+        log2n = np.log2(max(1, n))
+        return 2**int(round(log2n))
+
     u = ad.array(u0).copy()
     uHistory = [u]
     dt = t[1] - t[0]
     for i in range(len(t) - 1):
-        nSubdiv = roundTo2ToK((t[i+1] - t[i]) / dt)
+        iSubdiv, nSubdiv = 0, _roundTo2ToK((t[i+1] - t[i]) / dt)
         dt = (t[i+1] - t[i]) / nSubdiv
-        j = 0
-        while j < nSubdiv:
-            u3rd, u2nd = step(f, u, dt, args, argv)
+        while iSubdiv < nSubdiv:
+            u3rd, u2nd = step(f, u, dt)
             uNorm = np.linalg.norm(ad.value(u))
             errNorm = np.linalg.norm(ad.value(u3rd) - ad.value(u2nd))
             if errNorm > max(absTol, relTol * uNorm):
-                dt, j, nSubdiv = 0.5 * dt, 2 * j, 2 * nSubdiv
+                dt, iSubdiv, nSubdiv = 0.5 * dt, 2 * iSubdiv, 2 * nSubdiv
             else:
-                j += 1
+                iSubdiv += 1
                 u = u3rd
                 if obliviate:
                     u.obliviate()
-                print(t[i] + (t[i+1] - t[i]) * j / nSubdiv)
+                if disp:
+                    print(t[i] + (t[i+1] - t[i]) * iSubdiv / nSubdiv)
                 if errNorm < 0.25 * max(absTol, relTol * uNorm) and \
-                        j % 2 == 0 and nSubdiv > 1:
-                    dt, j, nSubdiv = 2 * dt, j / 2, nSubdiv / 2
-        assert j == nSubdiv
+                        iSubdiv % 2 == 0 and nSubdiv > 1:
+                    dt, iSubdiv, nSubdiv = 2 * dt, iSubdiv / 2, nSubdiv / 2
+        assert iSubdiv == nSubdiv
         uHistory.append(u)
     return ad.array(uHistory)
+
+
+class LSS(object):
+    """
+    Base class for both tangent and adjoint sensitivity analysis
+    During __init__, a trajectory is computed,
+    and the matrices used for both tangent and adjoint are built
+    """
+    def __init__(self, f, u0, s, T):
+        self.f = f
+        self.T = np.array(T, float).copy()
+        self.s = np.array(s, float).copy()
+
+        if self.s.ndim == 0:
+            self.s = self.s[np.newaxis]
+
+        u0 = np.array(u0, float)
+        if u0.ndim == 1:
+            # run up to T[0]
+            f = lambda u : self.f(u, s)
+            assert T[0] >= 0 and T.size > 1
+            u0 = pdeint(f, u0, [0, T[0]], obliviate=True)[-1]
+            # compute a trajectory
+            self.u = pdeint(f, u0, T - T[0])
+            np.save('.LSS.u.npy', ad.value(self.u))
+        else:
+            assert (u0.shape[0],) == T.shape
+            self.u = u0.copy()
+
+        self.dT = T[1:] - T[:-1]
+        self.dudt = array([f(u) for u in self.u])
+
 
 # =========================================================== #
 #                                                             #
@@ -93,21 +128,34 @@ def integrate(f, u0, t, relTol=1E-4, absTol=1E-6, args=(), argv={},
 
 class _RunThroughTest(unittest.TestCase):
     def testKuramotoSivashinsky(self):
-        pass
+        def kuramotoSivashinsky(u):
+            dx = L / N
+            uExt = np.hstack([0, u, 0])
+            u2 = uExt**2
+            u2x = (u2[2:] - u2[:-2]) / (4 * dx)
+            uxx = (uExt[2:] + uExt[:-2] - 2 * uExt[1:-1]) / dx**2
+            uxxExt = np.hstack([0, uxx, 0])
+            uxxxx = (uxxExt[2:] + uxxExt[:-2] - 2 * uxxExt[1:-1]) / dx**2
+            return -u2x - uxx - uxxxx
+        L, N = 10., 16
+        u0 = np.random.random(N-1)
+        t = np.linspace(0, 10, 11)
+        u = pdeint(kuramotoSivashinsky, u0, t, obliviate=True, disp=0)
 
 class _GlobalErrorTest(unittest.TestCase):
     def testHarmonicOscillator(self):
         T, N = 10, 100
         u0 = ad.array([1., 0.])
         t = np.linspace(0, T, N)
-        u1 = integrate(lambda u : ad.hstack([u[1], -u[0]]), u0, t)
-        u2 = integrate(lambda u : ad.hstack([u[1], -u[0]]), u0, [0, T])
+        u1 = pdeint(lambda u : ad.hstack([u[1], -u[0]]), u0, t)
+        u2 = pdeint(lambda u : ad.hstack([u[1], -u[0]]), u0, [0, T])
         accuracy = np.linalg.norm(ad.value(u1[-1] - u2[-1]))
         self.assertLess(accuracy, 5E-4)
 
 if __name__ == '__main__':
     # unittest.main()
-    def kuramotoSivashinsky(u, dx):
+    def kuramotoSivashinsky(u):
+        dx = L / N
         uExt = np.hstack([0, u, 0])
         u2 = uExt**2
         u2x = (u2[2:] - u2[:-2]) / (4 * dx)
@@ -115,9 +163,6 @@ if __name__ == '__main__':
         uxxExt = np.hstack([0, uxx, 0])
         uxxxx = (uxxExt[2:] + uxxExt[:-2] - 2 * uxxExt[1:-1]) / dx**2
         return -u2x - uxx - uxxxx
-
-    L, N = 100., 1024
+    L, N = 100., 256
     u0 = np.random.random(N-1)
-    t = np.linspace(0, 500, 501)
-    u = integrate(kuramotoSivashinsky, u0, t, args=(L / N,), obliviate=True)
-    np.save('u.npy', ad.value(u))
+    LSS(kuramotoSivashinsky, u0, linspace(20, 20 + 256, 256 + 1))
